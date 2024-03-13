@@ -1,0 +1,76 @@
+image:
+  name: "ubuntu:latest"
+
+stages:
+  - validate
+  - build
+  - docker_build
+  - apply
+
+variables:
+  TF_ROOT: ${CI_PROJECT_DIR}
+
+before_script:
+  - apt-get update && apt-get install -y gnupg software-properties-common
+  - apt-get install wget -y
+  - apt-get -y install curl
+  - apt-get -y install man
+  - apt-get -y install unzip
+  - curl -O https://releases.hashicorp.com/terraform/1.7.4/terraform_1.7.4_linux_amd64.zip
+  - unzip -o terraform_1.7.4_linux_amd64.zip
+  - mv terraform /usr/local/bin/
+  - rm -f terraform_1.7.4_linux_amd64.zip
+  - terraform --version
+
+fmt:
+  stage: validate
+  script:
+    - terraform fmt
+  allow_failure: true
+
+validate:
+  stage: validate
+  script:
+    - terraform init
+    - terraform validate
+
+build:
+  stage: build
+  script:
+    - apt-get install zip -y
+    - cd ${CI_PROJECT_DIR}/Lambda
+    - zip -r lambda_function.zip lambda_function.py
+    - ls -l ${CI_PROJECT_DIR}/Lambda
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/Lambda/lambda_function.zip
+  only:
+    changes:
+      - Lambda/**/*
+
+docker_build:
+  stage: docker_build
+  script:
+    - apt-get install docker.io -y
+    - docker build -t my_lambda_image ${CI_PROJECT_DIR}/docker
+    - docker save my_lambda_image > ${CI_PROJECT_DIR}/docker/my_lambda_image.tar
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/docker/my_lambda_image.tar
+  only:
+    changes:
+      - docker/**/*
+
+apply:
+  stage: apply
+  script:
+    - terraform init
+    - terraform apply --auto-approve
+  dependencies:
+    - build
+    - docker_build
+  resource_group: ${TF_STATE_NAME}
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $TF_AUTO_DEPLOY == "true"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
